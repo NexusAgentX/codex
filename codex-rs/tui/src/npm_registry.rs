@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use std::collections::HashMap;
+use url::Url;
 
-#[cfg(not(debug_assertions))]
-pub(crate) const PACKAGE_URL: &str = "https://registry.npmjs.org/@openai%2fcodex";
+const NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/";
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct NpmPackageInfo {
@@ -22,22 +22,25 @@ struct NpmPackageDist {
     integrity: Option<String>,
 }
 
-pub(crate) fn ensure_version_ready(
-    package_info: &NpmPackageInfo,
-    version: &str,
-) -> anyhow::Result<()> {
-    let version = version.trim();
+pub(crate) fn package_url(package_name: &str) -> anyhow::Result<Url> {
+    let mut url = Url::parse(NPM_REGISTRY_URL)?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("npm registry URL cannot contain package paths"))?
+        .push(package_name);
+    Ok(url)
+}
 
-    match package_info.dist_tags.get("latest").map(String::as_str) {
-        Some(latest) if latest == version => {}
-        Some(latest) => anyhow::bail!(
-            "npm latest dist-tag points to {latest}, expected GitHub release {version}"
-        ),
-        None => anyhow::bail!("npm package is missing latest dist-tag"),
-    }
+pub(crate) fn latest_ready_version(package_info: &NpmPackageInfo) -> anyhow::Result<String> {
+    let version = package_info
+        .dist_tags
+        .get("latest")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("npm package is missing latest dist-tag"))?;
 
     version_info_with_dist(package_info, version)?;
-    Ok(())
+    Ok(version.to_string())
 }
 
 fn version_info_with_dist<'a>(
@@ -81,9 +84,9 @@ mod tests {
         })
     }
 
-    fn package_info(github_latest: &str, npm_latest: &str) -> NpmPackageInfo {
+    fn package_info(version: &str, npm_latest: &str) -> NpmPackageInfo {
         let mut versions = serde_json::Map::new();
-        versions.insert(github_latest.to_string(), version_json(github_latest));
+        versions.insert(version.to_string(), version_json(version));
 
         serde_json::from_value(serde_json::json!({
             "dist-tags": { "latest": npm_latest },
@@ -93,22 +96,35 @@ mod tests {
     }
 
     #[test]
-    fn ready_version_requires_latest_dist_tag_and_root_dist() {
-        let latest = "1.2.3";
-        let package_info = package_info(latest, latest);
-
-        ensure_version_ready(&package_info, latest).expect("npm package is ready");
+    fn package_url_encodes_scoped_package_as_one_path_segment() {
+        assert_eq!(
+            package_url("@nexus-agent-x/codex")
+                .expect("valid registry URL")
+                .as_str(),
+            "https://registry.npmjs.org/@nexus-agent-x%2Fcodex"
+        );
     }
 
     #[test]
-    fn ready_version_rejects_stale_latest_dist_tag() {
+    fn ready_version_comes_from_latest_dist_tag_and_requires_root_dist() {
+        let latest = "1.2.3-nexus.4";
+        let package_info = package_info(latest, latest);
+
+        assert_eq!(
+            latest_ready_version(&package_info).expect("npm package is ready"),
+            latest
+        );
+    }
+
+    #[test]
+    fn ready_version_rejects_latest_tag_without_version_metadata() {
         let package_info = package_info("1.2.3", "1.2.2");
 
-        let err = ensure_version_ready(&package_info, "1.2.3")
-            .expect_err("npm latest dist-tag must match GitHub latest");
+        let err = latest_ready_version(&package_info)
+            .expect_err("npm latest dist-tag must resolve to package metadata");
         assert!(
-            err.to_string().contains("latest dist-tag"),
-            "error should name stale latest dist-tag: {err}"
+            err.to_string().contains("version 1.2.2 is missing"),
+            "error should name the missing latest version: {err}"
         );
     }
 
@@ -120,8 +136,8 @@ mod tests {
         }))
         .expect("valid npm package metadata");
 
-        let err = ensure_version_ready(&package_info, "1.2.3")
-            .expect_err("root package must have dist metadata");
+        let err =
+            latest_ready_version(&package_info).expect_err("root package needs dist metadata");
         assert!(
             err.to_string().contains("missing dist metadata"),
             "error should name missing dist metadata: {err}"

@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const BIN_DIRNAME: &str = "bin";
+const MANAGED_PACKAGE_NAME_ENV: &str = "CODEX_MANAGED_PACKAGE_NAME";
+const MANAGED_PACKAGE_VERSION_ENV: &str = "CODEX_MANAGED_PACKAGE_VERSION";
 const PACKAGE_METADATA_FILENAME: &str = "codex-package.json";
 const PATH_DIRNAME: &str = "codex-path";
 const RELEASES_DIRNAME: &str = "releases";
@@ -13,6 +15,125 @@ const RESOURCES_DIRNAME: &str = "codex-resources";
 const STANDALONE_PACKAGES_DIRNAME: &str = "standalone";
 const ZSH_DIRNAME: &str = "zsh";
 static INSTALL_CONTEXT: OnceLock<InstallContext> = OnceLock::new();
+
+pub const OFFICIAL_CODEX_NPM_PACKAGE: &str = "@openai/codex";
+pub const NEXUS_CODEX_NPM_PACKAGE: &str = "@nexus-agent-x/codex";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedPackage {
+    name: String,
+    version: String,
+}
+
+impl ManagedPackage {
+    pub fn for_codex_version(cli_version: &str) -> Self {
+        let package_name = std::env::var(MANAGED_PACKAGE_NAME_ENV).ok();
+        let package_version = std::env::var(MANAGED_PACKAGE_VERSION_ENV).ok();
+        Self::for_codex_version_with_candidates(
+            cli_version,
+            package_name.as_deref(),
+            package_version.as_deref(),
+        )
+    }
+
+    fn for_codex_version_with_candidates(
+        cli_version: &str,
+        package_name: Option<&str>,
+        package_version: Option<&str>,
+    ) -> Self {
+        let nexus_build = is_nexus_version(cli_version);
+        let default_name = if nexus_build {
+            NEXUS_CODEX_NPM_PACKAGE
+        } else {
+            OFFICIAL_CODEX_NPM_PACKAGE
+        };
+
+        let name = package_name
+            .filter(|name| is_valid_npm_package_name(name))
+            .filter(|name| !nexus_build || *name == NEXUS_CODEX_NPM_PACKAGE)
+            .unwrap_or(default_name)
+            .to_string();
+        let version = package_version
+            .filter(|version| is_valid_package_version(version))
+            .filter(|version| !nexus_build || is_nexus_version(version))
+            .unwrap_or(cli_version)
+            .to_string();
+
+        Self { name, version }
+    }
+
+    pub fn from_parts(name: impl Into<String>, version: impl Into<String>) -> Option<Self> {
+        let name = name.into();
+        let version = version.into();
+        if !is_valid_npm_package_name(&name) || !is_valid_package_version(&version) {
+            return None;
+        }
+        Some(Self { name, version })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn package_path(&self) -> PathBuf {
+        self.name.split('/').collect()
+    }
+
+    pub fn cache_key(&self) -> String {
+        format!("npm:{}", self.name)
+    }
+}
+
+pub fn is_nexus_version(version: &str) -> bool {
+    version
+        .trim()
+        .split_once('-')
+        .is_some_and(|(_, prerelease)| prerelease.starts_with("nexus."))
+}
+
+fn is_valid_npm_package_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 214 || name.trim() != name {
+        return false;
+    }
+
+    let mut parts = name.split('/');
+    let first = parts.next().unwrap_or_default();
+    let second = parts.next();
+    if parts.next().is_some() {
+        return false;
+    }
+
+    match second {
+        Some(package) => {
+            first
+                .strip_prefix('@')
+                .is_some_and(is_valid_npm_package_segment)
+                && is_valid_npm_package_segment(package)
+        }
+        None => is_valid_npm_package_segment(first),
+    }
+}
+
+fn is_valid_npm_package_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-._~".contains(&byte)
+        })
+}
+
+fn is_valid_package_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.trim() == version
+        && version
+            .bytes()
+            .all(|byte| !byte.is_ascii_control() && !byte.is_ascii_whitespace())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StandalonePlatform {
@@ -290,6 +411,54 @@ mod tests {
     use std::fs;
 
     const TEST_RESOURCE_NAME: &str = "codex-test-helper";
+
+    #[test]
+    fn managed_package_validates_names_and_builds_package_paths() {
+        let package = ManagedPackage::from_parts("@nexus-agent-x/codex", "0.144.3-nexus.1")
+            .expect("valid managed package");
+
+        assert_eq!(package.name(), NEXUS_CODEX_NPM_PACKAGE);
+        assert_eq!(package.version(), "0.144.3-nexus.1");
+        assert_eq!(
+            package.package_path(),
+            PathBuf::from("@nexus-agent-x").join("codex")
+        );
+        assert_eq!(package.cache_key(), "npm:@nexus-agent-x/codex");
+        assert!(ManagedPackage::from_parts("@scope/../package", "1.0.0").is_none());
+        assert!(ManagedPackage::from_parts("@scope/package;echo", "1.0.0").is_none());
+    }
+
+    #[test]
+    fn nexus_versions_are_identified_by_prerelease_name() {
+        assert!(is_nexus_version("0.144.3-nexus.1"));
+        assert!(is_nexus_version("0.144.3-nexus.1+build.2"));
+        assert!(!is_nexus_version("0.144.3"));
+        assert!(!is_nexus_version("0.144.3-other.1"));
+    }
+
+    #[test]
+    fn nexus_build_rejects_official_package_candidates() {
+        let package = ManagedPackage::for_codex_version_with_candidates(
+            "0.144.3-nexus.2",
+            Some(OFFICIAL_CODEX_NPM_PACKAGE),
+            Some("0.144.3"),
+        );
+
+        assert_eq!(package.name(), NEXUS_CODEX_NPM_PACKAGE);
+        assert_eq!(package.version(), "0.144.3-nexus.2");
+    }
+
+    #[test]
+    fn official_build_accepts_valid_wrapper_package_identity() {
+        let package = ManagedPackage::for_codex_version_with_candidates(
+            "0.144.3",
+            Some(NEXUS_CODEX_NPM_PACKAGE),
+            Some("0.144.3-nexus.1"),
+        );
+
+        assert_eq!(package.name(), NEXUS_CODEX_NPM_PACKAGE);
+        assert_eq!(package.version(), "0.144.3-nexus.1");
+    }
 
     #[test]
     fn detects_standalone_install_from_release_layout() -> std::io::Result<()> {

@@ -11,6 +11,8 @@ use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::McpAuthStatus;
 use codex_config::types::McpServerConfig;
+use codex_install_context::ManagedPackage;
+use codex_install_context::OFFICIAL_CODEX_NPM_PACKAGE;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -1139,8 +1141,12 @@ fn standalone_windows_update_available_history_cell_snapshot() {
 
 #[test]
 fn pnpm_update_available_history_cell_snapshot() {
-    let cell =
-        UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::PnpmGlobalLatest));
+    let package = ManagedPackage::from_parts(OFFICIAL_CODEX_NPM_PACKAGE, CODEX_CLI_VERSION)
+        .expect("valid managed package");
+    let cell = UpdateAvailableHistoryCell::new(
+        "9.9.9".to_string(),
+        Some(UpdateAction::PnpmGlobalLatest(package)),
+    );
     let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
 
     insta::assert_snapshot!(rendered);
