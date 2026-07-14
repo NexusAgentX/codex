@@ -10,6 +10,14 @@ Install it globally with:
 npm install -g @nexus-agent-x/codex
 ```
 
+When replacing an existing official npm installation, uninstall it first;
+both packages provide the same `codex` executable:
+
+```bash
+npm uninstall -g @openai/codex
+npm install -g @nexus-agent-x/codex
+```
+
 The release pipeline builds and validates native packages for:
 
 - Linux x64 and ARM64

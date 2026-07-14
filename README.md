@@ -11,6 +11,14 @@ Install a published Nexus build on Linux, macOS, or Windows with:
 npm install -g @nexus-agent-x/codex
 ```
 
+If `@openai/codex` is already installed globally, remove it first because both
+packages provide the same `codex` executable:
+
+```shell
+npm uninstall -g @openai/codex
+npm install -g @nexus-agent-x/codex
+```
+
 Native packages are built for x64 and ARM64 on all three operating systems.
 macOS and Windows executables are unsigned community builds. See
 [Nexus releases](https://github.com/NexusAgentX/codex/releases) and the
