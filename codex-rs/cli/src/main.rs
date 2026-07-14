@@ -739,7 +739,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
         ExitReason::UserRequested => false,
     };
 
-    let update_action = exit_info.update_action;
+    let update_action = exit_info.update_action.clone();
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
@@ -808,6 +808,12 @@ fn run_update_command() -> anyhow::Result<()> {
     #[cfg(not(debug_assertions))]
     {
         let Some(action) = codex_tui::get_update_action() else {
+            if codex_install_context::is_nexus_version(CODEX_CLI_VERSION) {
+                anyhow::bail!(
+                    "Nexus Codex can only self-update when installed with npm, bun, or pnpm. Reinstall with `npm install -g {}`.",
+                    codex_install_context::NEXUS_CODEX_NPM_PACKAGE
+                );
+            }
             anyhow::bail!(
                 "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
             );
