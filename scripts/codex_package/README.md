@@ -32,7 +32,9 @@ prints its path after the package is built.
 
 The `--variant` flag selects the package entrypoint. Supported variants are
 `codex` and `codex-app-server`. The `version` field in `codex-package.json` is
-read from `[workspace.package].version` in `codex-rs/Cargo.toml`.
+read from `[workspace.package].version` in `codex-rs/Cargo.toml` by default.
+Pass `--version` when a downstream build needs its package metadata to carry a
+derived release version.
 
 ## Source-built artifacts
 

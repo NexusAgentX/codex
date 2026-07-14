@@ -39,6 +39,13 @@ git push origin nexus-v0.144.3.1
 Only a pushed `nexus-v*` tag publishes a GitHub Release. Pushing the `nexus`
 branch alone does not start the release workflow.
 
+The upstream version remains unchanged in `codex-rs/Cargo.toml`. A tag such as
+`nexus-v0.144.3.1` derives the Nexus version `0.144.3-nexus.1` for the binary,
+package metadata, and npm tarballs. Increment the final tag component for
+additional Nexus builds on the same upstream version, and reset it to `1` when
+moving to a new upstream version. Manual validation runs use `nexus.0` and are
+never published.
+
 ## npm package validation
 
 The npm scope is `@nexus-agent-x`, and the CLI package is

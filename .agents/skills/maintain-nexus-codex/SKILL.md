@@ -105,16 +105,20 @@ to `main` starts the fork's upstream CI workflows. Never merge `nexus` into
 
 1. Use `@nexus-agent-x/codex` as the root package and derive platform aliases
    from that name.
-2. Treat npm tarballs attached to a GitHub Release as validation artifacts,
+2. Keep `codex-rs/Cargo.toml` at the upstream version. Derive
+   `<upstream>-nexus.<build>` from the final numeric component of the
+   `nexus-v<upstream>.<build>` tag, and use it consistently for the embedded
+   CLI version, package metadata, and npm packages.
+3. Treat npm tarballs attached to a GitHub Release as validation artifacts,
    not proof that a registry publish occurred.
-3. Do not publish the root package while any referenced platform version is
+4. Do not publish the root package while any referenced platform version is
    missing. The initial workflow builds only Linux x86_64.
-4. Run the focused Python package tests and inspect `npm pack` metadata before
+5. Run the focused Python package tests and inspect `npm pack` metadata before
    publishing.
-5. Before the first publish, adapt and test the native TUI updater; the
+6. Before the first publish, adapt and test the native TUI updater; the
    inherited implementation still resolves the upstream release and npm
    package.
-6. Require explicit user authorization before `npm publish`. After the first
+7. Require explicit user authorization before `npm publish`. After the first
    registry release, prefer npm Trusted Publishing with GitHub Actions OIDC
    instead of storing a long-lived token.
 
