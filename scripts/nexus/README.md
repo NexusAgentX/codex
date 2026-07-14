@@ -23,6 +23,11 @@ Pass `--target rust-vX.Y.Z` to select a specific stable release. The script
 creates a backup branch before it changes `nexus` and prints a `range-diff`
 command for reviewing the result.
 
+The `Nexus upstream check` workflow compares this base with OpenAI's latest
+stable GitHub Release every Monday at 02:17 UTC. It fails with a preview
+command in the job summary when an update is available; it never rewrites the
+branch. The workflow can also be run manually from GitHub Actions.
+
 ## Build and publish a GitHub Release
 
 The release workflow builds native packages for Linux x64/ARM64, macOS
