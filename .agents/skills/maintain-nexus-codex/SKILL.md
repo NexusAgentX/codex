@@ -42,20 +42,22 @@ description: Maintain the NexusAgentX Codex fork in this repository by preservin
    scripts/nexus/update-upstream.sh --dry-run
    ```
 
-3. Use `--target rust-vX.Y.Z` when the user requested a specific release.
-4. Run the update only after reviewing the old base, new base, and patch count:
+3. Treat the scheduled `Nexus upstream check` workflow as a notification. It
+   may report drift, but it must never rewrite `nexus` automatically.
+4. Use `--target rust-vX.Y.Z` when the user requested a specific release.
+5. Run the update only after reviewing the old base, new base, and patch count:
 
    ```bash
    scripts/nexus/update-upstream.sh
    ```
 
-5. Resolve rebase conflicts without dropping Nexus behavior. Use the backup
+6. Resolve rebase conflicts without dropping Nexus behavior. Use the backup
    branch and `git range-diff` command printed by the script to compare the old
    and new patch stacks.
-6. Run `just fmt` from `codex-rs`, then run focused tests for every changed
+7. Run `just fmt` from `codex-rs`, then run focused tests for every changed
    crate with `just test -p <crate>`. Ask before running the complete workspace
    test suite, as required by the repository instructions.
-7. Push rewritten history only after validation:
+8. Push rewritten history only after validation:
 
    ```bash
    git push --force-with-lease origin nexus
