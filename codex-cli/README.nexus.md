@@ -10,8 +10,14 @@ Install it globally with:
 npm install -g @nexus-agent-x/codex
 ```
 
-The package currently remains in pre-release validation. Published platform
-support is listed in each NexusAgentX GitHub Release.
+The package currently remains in pre-release validation. The release pipeline
+builds and validates native packages for:
+
+- Linux x64 and ARM64
+- macOS Intel and Apple Silicon
+- Windows x64 and ARM64
+
+macOS and Windows executables are unsigned community builds.
 
 The upstream project is [`openai/codex`](https://github.com/openai/codex).
 This distribution is licensed under Apache-2.0 and is not an official OpenAI
