@@ -195,6 +195,7 @@ mod updates;
 #[cfg(any(not(debug_assertions), test))]
 mod updates_cache;
 mod version;
+pub use version::CODEX_CLI_VERSION;
 mod width;
 #[cfg(any(target_os = "windows", test))]
 mod windows_sandbox;

@@ -29,6 +29,7 @@ use codex_rollout_trace::replay_bundle;
 use codex_state::StateRuntime;
 use codex_state::memories_db_path;
 use codex_tui::AppExitInfo;
+use codex_tui::CODEX_CLI_VERSION;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
@@ -94,7 +95,7 @@ use codex_terminal_detection::TerminalName;
 #[derive(Debug, Parser)]
 #[clap(
     author,
-    version,
+    version = CODEX_CLI_VERSION,
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like

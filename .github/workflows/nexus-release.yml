@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
-      npm_version: ${{ steps.metadata.outputs.npm_version }}
+      nexus_version: ${{ steps.metadata.outputs.nexus_version }}
       version: ${{ steps.metadata.outputs.version }}
     env:
       TARGET: x86_64-unknown-linux-musl
@@ -53,9 +53,10 @@ jobs:
             build_number="0"
           fi
 
-          npm_version="${version}-nexus.${build_number}"
-          echo "NPM_VERSION=${npm_version}" >> "$GITHUB_ENV"
-          echo "npm_version=${npm_version}" >> "$GITHUB_OUTPUT"
+          nexus_version="${version}-nexus.${build_number}"
+          echo "CODEX_CLI_VERSION_OVERRIDE=${nexus_version}" >> "$GITHUB_ENV"
+          echo "NEXUS_VERSION=${nexus_version}" >> "$GITHUB_ENV"
+          echo "nexus_version=${nexus_version}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/setup-ci
@@ -86,9 +87,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Stable upstream tags update Cargo.toml without rewriting local
+          # workspace package versions in Cargo.lock. Let Cargo refresh only
+          # those entries while retaining the locked third-party resolutions.
           cargo build \
             --manifest-path codex-rs/Cargo.toml \
-            --locked \
             --target "$TARGET" \
             --release \
             --bin bwrap
@@ -110,13 +113,20 @@ jobs:
           python3 scripts/build_codex_package.py \
             --target "$TARGET" \
             --variant codex \
+            --version "$NEXUS_VERSION" \
             --cargo-profile release \
             --bwrap-bin "$BWRAP_BIN" \
             --package-dir "$package_dir" \
             --archive-output "$archive" \
             --force
 
-          "$package_dir/bin/codex" --version
+          version_output="$("$package_dir/bin/codex" --version)"
+          if [[ "${version_output##* }" != "$NEXUS_VERSION" ]]; then
+            echo "Unexpected Codex version output: ${version_output}" >&2
+            exit 1
+          fi
+          jq -e --arg version "$NEXUS_VERSION" \
+            '.version == $version' "$package_dir/codex-package.json" >/dev/null
 
           vendor_target="$RUNNER_TEMP/npm-vendor/$TARGET"
           mkdir -p "$vendor_target" dist/npm
@@ -124,14 +134,14 @@ jobs:
 
           python3 codex-cli/scripts/build_npm_package.py \
             --package codex-linux-x64 \
-            --release-version "$NPM_VERSION" \
+            --release-version "$NEXUS_VERSION" \
             --vendor-src "$RUNNER_TEMP/npm-vendor" \
-            --pack-output "dist/npm/codex-npm-linux-x64-$NPM_VERSION.tgz"
+            --pack-output "dist/npm/codex-npm-linux-x64-$NEXUS_VERSION.tgz"
 
           python3 codex-cli/scripts/build_npm_package.py \
             --package codex \
-            --release-version "$NPM_VERSION" \
-            --pack-output "dist/npm/codex-npm-$NPM_VERSION.tgz"
+            --release-version "$NEXUS_VERSION" \
+            --pack-output "dist/npm/codex-npm-$NEXUS_VERSION.tgz"
 
       - name: Upload package artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -182,7 +192,7 @@ jobs:
 
             Source commit: `${{ github.sha }}`
             Initial target: Linux x86_64 (musl)
-            npm package version: `${{ needs.build-linux-x64.outputs.npm_version }}`
+            Nexus version: `${{ needs.build-linux-x64.outputs.nexus_version }}`
 
             The attached npm tarballs are validation artifacts. This workflow does not publish them to npmjs.com.
           files: release/*
