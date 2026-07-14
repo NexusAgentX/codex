@@ -15,9 +15,12 @@ This downloads the required native package archive artifacts, hydrates `vendor/`
 each package, and writes tarballs to `dist/npm/`.
 
 When `--package codex` is provided, the staging helper builds the lightweight
-`@openai/codex` meta package plus all platform-native `@openai/codex` variants
-that are later published under platform-specific dist-tags.
+`@nexus-agent-x/codex` meta package plus all platform-native
+`@nexus-agent-x/codex` variants that are later published under
+platform-specific versions.
 
 Direct `build_npm_package.py` invocations are still useful for package-specific
 debugging, but native packages expect `--vendor-src` to point at a prehydrated
-`vendor/` tree. Release packaging should use `scripts/stage_npm_packages.py`.
+`vendor/` tree. Full cross-platform release packaging should use
+`scripts/stage_npm_packages.py`. The Nexus single-target validation workflow
+invokes the package builder directly until all target builds are available.

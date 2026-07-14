@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
+      npm_version: ${{ steps.metadata.outputs.npm_version }}
       version: ${{ steps.metadata.outputs.version }}
     env:
       TARGET: x86_64-unknown-linux-musl
@@ -47,11 +48,25 @@ jobs:
               echo "Tag '${GITHUB_REF_NAME}' must match nexus-v${version}.<build>." >&2
               exit 1
             fi
+            build_number="${GITHUB_REF_NAME##*.}"
+          else
+            build_number="0"
           fi
 
+          npm_version="${version}-nexus.${build_number}"
+          echo "NPM_VERSION=${npm_version}" >> "$GITHUB_ENV"
+          echo "npm_version=${npm_version}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/setup-ci
+
+      - name: Set up Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+
+      - name: Test Nexus npm packaging
+        run: python3 -m unittest discover -s codex-cli/scripts -p 'test_build_npm_package.py'
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
@@ -103,11 +118,33 @@ jobs:
 
           "$package_dir/bin/codex" --version
 
+          vendor_target="$RUNNER_TEMP/npm-vendor/$TARGET"
+          mkdir -p "$vendor_target" dist/npm
+          cp -a "$package_dir/." "$vendor_target/"
+
+          python3 codex-cli/scripts/build_npm_package.py \
+            --package codex-linux-x64 \
+            --release-version "$NPM_VERSION" \
+            --vendor-src "$RUNNER_TEMP/npm-vendor" \
+            --pack-output "dist/npm/codex-npm-linux-x64-$NPM_VERSION.tgz"
+
+          python3 codex-cli/scripts/build_npm_package.py \
+            --package codex \
+            --release-version "$NPM_VERSION" \
+            --pack-output "dist/npm/codex-npm-$NPM_VERSION.tgz"
+
       - name: Upload package artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: codex-package-x86_64-unknown-linux-musl
           path: dist/codex-package-x86_64-unknown-linux-musl.tar.gz
+          if-no-files-found: error
+
+      - name: Upload npm tarballs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: nexus-npm-tarballs
+          path: dist/npm/*.tgz
           if-no-files-found: error
 
   release:
@@ -125,10 +162,16 @@ jobs:
           name: codex-package-x86_64-unknown-linux-musl
           path: release
 
+      - name: Download npm tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nexus-npm-tarballs
+          path: release
+
       - name: Generate checksum manifest
         shell: bash
         working-directory: release
-        run: sha256sum *.tar.gz > SHA256SUMS
+        run: sha256sum *.tar.gz *.tgz > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
@@ -139,6 +182,9 @@ jobs:
 
             Source commit: `${{ github.sha }}`
             Initial target: Linux x86_64 (musl)
+            npm package version: `${{ needs.build-linux-x64.outputs.npm_version }}`
+
+            The attached npm tarballs are validation artifacts. This workflow does not publish them to npmjs.com.
           files: release/*
           fail_on_unmatched_files: true
           make_latest: true

@@ -38,3 +38,18 @@ git push origin nexus-v0.144.3.1
 
 Only a pushed `nexus-v*` tag publishes a GitHub Release. Pushing the `nexus`
 branch alone does not start the release workflow.
+
+## npm package validation
+
+The npm scope is `@nexus-agent-x`, and the CLI package is
+`@nexus-agent-x/codex`. A manual `nexus-release` run builds Linux x86_64 npm
+tarballs without publishing them. A release tag also attaches those tarballs
+to the GitHub Release as validation artifacts.
+
+Do not publish the root package to npmjs.com until every platform version it
+references has been built and tested. The initial workflow provides only the
+Linux x86_64 platform version. Publishing requires a separate, explicitly
+authorized npm step. Before the first registry release, adapt and test the
+native TUI update checker so Nexus npm installations resolve both release
+metadata and update commands through `@nexus-agent-x/codex`; the inherited
+implementation still targets the upstream GitHub releases and npm package.

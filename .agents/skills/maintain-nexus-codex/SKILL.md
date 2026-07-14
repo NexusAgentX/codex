@@ -101,6 +101,23 @@ to `main` starts the fork's upstream CI workflows. Never merge `nexus` into
    musl package. Do not claim support for other targets until their jobs and
    installation paths have been implemented and tested.
 
+## Prepare npm Artifacts
+
+1. Use `@nexus-agent-x/codex` as the root package and derive platform aliases
+   from that name.
+2. Treat npm tarballs attached to a GitHub Release as validation artifacts,
+   not proof that a registry publish occurred.
+3. Do not publish the root package while any referenced platform version is
+   missing. The initial workflow builds only Linux x86_64.
+4. Run the focused Python package tests and inspect `npm pack` metadata before
+   publishing.
+5. Before the first publish, adapt and test the native TUI updater; the
+   inherited implementation still resolves the upstream release and npm
+   package.
+6. Require explicit user authorization before `npm publish`. After the first
+   registry release, prefer npm Trusted Publishing with GitHub Actions OIDC
+   instead of storing a long-lived token.
+
 ## Report Results
 
 State the old and new upstream bases, patch count, commit SHA, validations run,
