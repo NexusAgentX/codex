@@ -85,7 +85,7 @@ jobs:
       - metadata
       - package-tests
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: read
     env:
