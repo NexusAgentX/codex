@@ -23,10 +23,11 @@ Pass `--target rust-vX.Y.Z` to select a specific stable release. The script
 creates a backup branch before it changes `nexus` and prints a `range-diff`
 command for reviewing the result.
 
-## Publish a build
+## Build and publish a GitHub Release
 
-The initial release workflow builds the complete Linux x86_64 musl package.
-It can be tested from the GitHub Actions UI without publishing a release.
+The release workflow builds native packages for Linux x64/ARM64, macOS
+Intel/Apple Silicon, and Windows x64/ARM64. It can be tested from the GitHub
+Actions UI without publishing a release or writing to npm.
 
 After updating and testing `nexus`, create a monotonically increasing build
 tag whose first three components match `codex-rs/Cargo.toml`:
@@ -46,17 +47,87 @@ additional Nexus builds on the same upstream version, and reset it to `1` when
 moving to a new upstream version. Manual validation runs use `nexus.0` and are
 never published.
 
-## npm package validation
+## npm packages
 
 The npm scope is `@nexus-agent-x`, and the CLI package is
-`@nexus-agent-x/codex`. A manual `nexus-release` run builds Linux x86_64 npm
-tarballs without publishing them. A release tag also attaches those tarballs
-to the GitHub Release as validation artifacts.
+`@nexus-agent-x/codex`. A manual `nexus-release` run builds seven tarballs
+without publishing them: six platform versions and one root wrapper. A release
+tag attaches those exact tarballs to the GitHub Release.
 
-Do not publish the root package to npmjs.com until every platform version it
-references has been built and tested. The initial workflow provides only the
-Linux x86_64 platform version. Publishing requires a separate, explicitly
-authorized npm step. Before the first registry release, adapt and test the
-native TUI update checker so Nexus npm installations resolve both release
-metadata and update commands through `@nexus-agent-x/codex`; the inherited
-implementation still targets the upstream GitHub releases and npm package.
+Every tarball is a version of the same npm package. Platform versions use
+suffixes such as `0.144.3-nexus.1-linux-x64`; the root version references them
+through npm aliases. Platform versions must be published serially before the
+root version advances `latest`.
+
+The workflow's npm job is disabled unless the repository variable
+`NEXUS_NPM_PUBLISH_ENABLED` is exactly `true`. Do not enable it before the
+package exists and npm Trusted Publishing is configured.
+
+### First registry release
+
+The first release requires an explicitly authorized manual bootstrap because
+npm cannot configure a trusted publisher for a package that does not exist.
+After a tagged GitHub Release succeeds, download and validate its npm assets:
+
+```bash
+release_tag=nexus-v0.144.3.1
+version=0.144.3-nexus.1
+npm_dir="$(mktemp -d)"
+gh release download "$release_tag" \
+  --repo NexusAgentX/codex \
+  --pattern 'codex-npm-*.tgz' \
+  --dir "$npm_dir"
+python codex-cli/scripts/validate_nexus_npm_release.py \
+  --version "$version" \
+  --tarball-dir "$npm_dir"
+```
+
+With the `nexus-agent-x` npm login and its second factor available, publish
+each platform version under its own dist-tag, then publish the root last:
+
+```bash
+for platform in \
+  linux-x64 linux-arm64 \
+  darwin-x64 darwin-arm64 \
+  win32-x64 win32-arm64
+do
+  npm publish "$npm_dir/codex-npm-${platform}-${version}.tgz" \
+    --access public \
+    --tag "$platform"
+done
+npm publish "$npm_dir/codex-npm-${version}.tgz" \
+  --access public \
+  --tag latest
+```
+
+Never put an npm password, one-time code, or long-lived token in this
+repository or a workflow file.
+
+### Trusted Publishing
+
+After the bootstrap, follow npm's
+[Trusted Publishing documentation](https://docs.npmjs.com/trusted-publishers/)
+and configure the package with:
+
+- GitHub organization/user: `NexusAgentX`
+- Repository: `codex`
+- Workflow filename: `nexus-release.yml`
+- Environment: `npm-publish`
+- Allowed actions: `npm publish`
+
+Create and protect the matching GitHub environment, then enable OIDC
+publication:
+
+```bash
+gh variable set NEXUS_NPM_PUBLISH_ENABLED \
+  --repo NexusAgentX/codex \
+  --body true
+```
+
+The tag workflow will then validate the complete set again, publish all six
+platform versions serially, publish the root under `latest`, and verify every
+dist-tag. It uses no `NODE_AUTH_TOKEN` or stored npm secret.
+
+The native updater is Nexus-aware: npm installations check
+`@nexus-agent-x/codex`, preserve prerelease ordering, and do not redirect to
+the upstream package.
