@@ -125,8 +125,10 @@ class ValidateNexusNpmReleaseTest(unittest.TestCase):
         root_staging_dir = temp_path / "staging-codex"
         root_staging_dir.mkdir()
         build_npm_package.stage_sources(root_staging_dir, NPM_VERSION, "codex")
-        build_npm_package.run_npm_pack(
-            root_staging_dir, tarball_dir / f"codex-npm-{NPM_VERSION}.tgz"
+        root_tarball_path = tarball_dir / f"codex-npm-{NPM_VERSION}.tgz"
+        build_npm_package.run_npm_pack(root_staging_dir, root_tarball_path)
+        self._set_tarball_member_modes(
+            root_tarball_path, {"package/bin/codex.js"}, 0o755
         )
         return tarball_dir
 
