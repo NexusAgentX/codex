@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Nexus Codex"
+  short_description: "Sync, validate, and release the Nexus Codex fork"
+  default_prompt: "Use $maintain-nexus-codex to update the Nexus Codex fork to the latest stable upstream release."
