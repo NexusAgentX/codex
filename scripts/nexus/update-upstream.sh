@@ -23,6 +23,50 @@ branch="${NEXUS_BRANCH:-nexus}"
 target_tag="${NEXUS_TARGET_TAG:-}"
 dry_run="false"
 
+github_slug() {
+  local url="$1"
+  url="${url%.git}"
+
+  case "$url" in
+    https://github.com/*)
+      printf '%s\n' "${url#https://github.com/}"
+      ;;
+    git@github.com:*)
+      printf '%s\n' "${url#git@github.com:}"
+      ;;
+    ssh://git@github.com/*)
+      printf '%s\n' "${url#ssh://git@github.com/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+require_github_remote() {
+  local remote="$1"
+  local expected_slug="$2"
+  local url
+  local actual_slug
+  local normalized_actual_slug
+  local normalized_expected_slug
+
+  if ! url="$(git remote get-url "$remote" 2>/dev/null)"; then
+    echo "Missing '${remote}' remote; expected ${expected_slug}." >&2
+    exit 1
+  fi
+  if ! actual_slug="$(github_slug "$url")"; then
+    echo "Remote '${remote}' must point to ${expected_slug}, got '${url}'." >&2
+    exit 1
+  fi
+  normalized_actual_slug="$(printf '%s' "$actual_slug" | tr '[:upper:]' '[:lower:]')"
+  normalized_expected_slug="$(printf '%s' "$expected_slug" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$normalized_actual_slug" != "$normalized_expected_slug" ]]; then
+    echo "Remote '${remote}' must point to ${expected_slug}, got '${url}'." >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --branch)
@@ -60,10 +104,8 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
   exit 1
 fi
 
-if ! git remote get-url upstream >/dev/null 2>&1; then
-  echo "Missing upstream remote. Add https://github.com/openai/codex.git as upstream." >&2
-  exit 1
-fi
+require_github_remote origin NexusAgentX/codex
+require_github_remote upstream openai/codex
 
 if ! git show-ref --verify --quiet "refs/heads/${branch}"; then
   echo "Local branch '${branch}' does not exist." >&2
