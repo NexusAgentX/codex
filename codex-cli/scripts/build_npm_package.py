@@ -439,6 +439,9 @@ def copy_native_binaries(
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    npm_executable = shutil.which("npm")
+    if npm_executable is None:
+        raise RuntimeError("npm executable not found in PATH.")
 
     with tempfile.TemporaryDirectory(prefix="codex-npm-pack-") as pack_dir_str:
         pack_dir = Path(pack_dir_str)
@@ -450,7 +453,13 @@ def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
         env["NPM_CONFIG_CACHE"] = str(npm_cache_dir)
         env["NPM_CONFIG_LOGS_DIR"] = str(npm_logs_dir)
         stdout = subprocess.check_output(
-            ["npm", "pack", "--json", "--pack-destination", str(pack_dir)],
+            [
+                npm_executable,
+                "pack",
+                "--json",
+                "--pack-destination",
+                str(pack_dir),
+            ],
             cwd=staging_dir,
             env=env,
             text=True,

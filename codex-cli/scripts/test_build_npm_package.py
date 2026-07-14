@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import build_npm_package
 
@@ -16,6 +17,36 @@ NPM_VERSION = "0.144.3-nexus.1"
 
 
 class BuildNpmPackageTest(unittest.TestCase):
+    def test_resolves_npm_executable_before_packing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            staging_dir = temp_path / "staging"
+            staging_dir.mkdir()
+            output_path = temp_path / "codex.tgz"
+            resolved_npm = r"C:\hostedtoolcache\node\npm.cmd"
+
+            def fake_npm_pack(command: list[str], **_: object) -> str:
+                self.assertEqual(command[0], resolved_npm)
+                pack_dir = Path(command[command.index("--pack-destination") + 1])
+                (pack_dir / "packed.tgz").touch()
+                return json.dumps([{"filename": "packed.tgz"}])
+
+            with (
+                mock.patch.object(
+                    build_npm_package.shutil,
+                    "which",
+                    return_value=resolved_npm,
+                ),
+                mock.patch.object(
+                    build_npm_package.subprocess,
+                    "check_output",
+                    side_effect=fake_npm_pack,
+                ),
+            ):
+                build_npm_package.run_npm_pack(staging_dir, output_path)
+
+            self.assertTrue(output_path.is_file())
+
     def test_root_package_uses_nexus_platform_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             staging_dir = Path(temp_dir) / "staging"
