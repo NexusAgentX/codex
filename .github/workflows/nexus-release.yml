@@ -414,7 +414,129 @@ jobs:
             Targets: Linux x64/ARM64, macOS Intel/Apple Silicon, Windows x64/ARM64
 
             macOS and Windows executables are unsigned community builds. The attached npm
-            tarballs are validation artifacts; this workflow does not publish to npmjs.com.
+            tarballs are the exact registry publication artifacts. npm publication remains
+            separately gated by the repository's `NEXUS_NPM_PUBLISH_ENABLED` variable.
           files: release/*
           fail_on_unmatched_files: true
           make_latest: true
+
+  publish-npm:
+    name: Publish npm package
+    if: >-
+      ${{
+        github.event_name == 'push' &&
+        startsWith(github.ref, 'refs/tags/nexus-v') &&
+        vars.NEXUS_NPM_PUBLISH_ENABLED == 'true' &&
+        needs.release.result == 'success'
+      }}
+    needs:
+      - metadata
+      - release
+    runs-on: ubuntu-24.04
+    environment:
+      name: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          # npm Trusted Publishing requires npm >= 11.5.1.
+          node-version: 24
+          package-manager-cache: false
+          registry-url: "https://registry.npmjs.org"
+          scope: "@nexus-agent-x"
+
+      - name: Download npm tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nexus-npm-tarballs
+          path: dist/npm
+
+      - name: Validate npm release set before publication
+        env:
+          NEXUS_VERSION: ${{ needs.metadata.outputs.nexus_version }}
+        run: |
+          set -euo pipefail
+          python codex-cli/scripts/validate_nexus_npm_release.py \
+            --version "$NEXUS_VERSION" \
+            --tarball-dir dist/npm
+
+      # No NODE_AUTH_TOKEN is used. npm exchanges the GitHub OIDC identity for
+      # short-lived publication credentials after the trusted publisher is configured.
+      - name: Publish platform versions, then root package
+        env:
+          NEXUS_VERSION: ${{ needs.metadata.outputs.nexus_version }}
+        run: |
+          set -euo pipefail
+          version="$NEXUS_VERSION"
+          package_name="@nexus-agent-x/codex"
+          platform_tags=(
+            linux-x64
+            linux-arm64
+            darwin-x64
+            darwin-arm64
+            win32-x64
+            win32-arm64
+          )
+
+          publish_tarball() {
+            local tarball="$1"
+            local tag="$2"
+            local filename
+            filename="$(basename "$tarball")"
+
+            if [[ ! -f "$tarball" ]]; then
+              echo "Missing npm tarball: $tarball" >&2
+              return 1
+            fi
+
+            publish_cmd=(npm publish "$tarball" --access public --tag "$tag")
+            echo "+ npm publish $filename --access public --tag $tag"
+            set +e
+            publish_output="$("${publish_cmd[@]}" 2>&1)"
+            publish_status=$?
+            set -e
+            echo "$publish_output"
+
+            if [[ $publish_status -eq 0 ]]; then
+              return 0
+            fi
+            if grep -qiE \
+              "previously published|cannot publish over|version already exists" \
+              <<< "$publish_output"; then
+              echo "Skipping already-published package version for $filename"
+              return 0
+            fi
+            return "$publish_status"
+          }
+
+          # Every platform tarball is a distinct version of the same package.
+          # Publish serially to avoid registry packument conflicts. The root
+          # wrapper advances latest only after all six exact dependencies exist.
+          for platform_tag in "${platform_tags[@]}"; do
+            publish_tarball \
+              "dist/npm/codex-npm-${platform_tag}-${version}.tgz" \
+              "$platform_tag"
+          done
+          publish_tarball "dist/npm/codex-npm-${version}.tgz" latest
+
+          npm view "$package_name" dist-tags --json > "$RUNNER_TEMP/npm-dist-tags.json"
+          jq -e --arg version "$version" '
+            .latest == $version and
+            .["linux-x64"] == ($version + "-linux-x64") and
+            .["linux-arm64"] == ($version + "-linux-arm64") and
+            .["darwin-x64"] == ($version + "-darwin-x64") and
+            .["darwin-arm64"] == ($version + "-darwin-arm64") and
+            .["win32-x64"] == ($version + "-win32-x64") and
+            .["win32-arm64"] == ($version + "-win32-arm64")
+          ' "$RUNNER_TEMP/npm-dist-tags.json"

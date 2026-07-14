@@ -97,9 +97,9 @@ to `main` starts the fork's upstream CI workflows. Never merge `nexus` into
    user asks to test packaging.
 6. Push an annotated `nexus-v*` tag only when the user asks to publish. Watch
    the workflow to completion and verify the release assets and checksums.
-7. Remember that the initial workflow publishes only the complete Linux x86_64
-   musl package. Do not claim support for other targets until their jobs and
-   installation paths have been implemented and tested.
+7. Require the release workflow to complete Linux x64/ARM64, macOS
+   Intel/Apple Silicon, and Windows x64/ARM64 before claiming a release is
+   ready. macOS and Windows executables are unsigned community builds.
 
 ## Prepare npm Artifacts
 
@@ -111,16 +111,24 @@ to `main` starts the fork's upstream CI workflows. Never merge `nexus` into
    CLI version, package metadata, and npm packages.
 3. Treat npm tarballs attached to a GitHub Release as validation artifacts,
    not proof that a registry publish occurred.
-4. Do not publish the root package while any referenced platform version is
-   missing. The initial workflow builds only Linux x86_64.
-5. Run the focused Python package tests and inspect `npm pack` metadata before
+4. Do not publish the root package while any of its six referenced platform
+   versions is missing. Publish platform versions serially under their
+   platform dist-tags, then publish the root version under `latest`.
+5. Run the focused Python package tests on Linux and Windows, validate the
+   complete seven-tarball set, and inspect `npm pack` metadata before
    publishing.
-6. Before the first publish, adapt and test the native TUI updater; the
-   inherited implementation still resolves the upstream release and npm
-   package.
-7. Require explicit user authorization before `npm publish`. After the first
-   registry release, prefer npm Trusted Publishing with GitHub Actions OIDC
-   instead of storing a long-lived token.
+6. Preserve the Nexus-aware native updater behavior: Nexus npm installations
+   must check `@nexus-agent-x/codex`, compare prerelease versions correctly,
+   and never redirect users to the upstream package.
+7. Require explicit user authorization before the first `npm publish`. The
+   first registry release must be bootstrapped with the user's npm login and
+   second factor because Trusted Publishing cannot be configured before the
+   package exists.
+8. After the bootstrap release, configure npm Trusted Publishing for
+   `NexusAgentX/codex`, workflow `nexus-release.yml`, and environment
+   `npm-publish`, allowing only `npm publish`. Keep
+   `NEXUS_NPM_PUBLISH_ENABLED` unset until that setup is complete; then use the
+   OIDC job instead of storing a long-lived token.
 
 ## Report Results
 
