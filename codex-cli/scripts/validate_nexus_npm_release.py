@@ -129,6 +129,7 @@ def validate_root_tarball(tarball_path: Path, version: str) -> None:
                 "package/README.md",
             },
         )
+        require_executable_files(archive, {"package/bin/codex.js"})
 
 
 def validate_platform_tarball(
@@ -178,8 +179,22 @@ def validate_platform_tarball(
             f"{vendor_prefix}bin/codex-code-mode-host{exe_suffix}",
             f"{vendor_prefix}codex-path/rg{exe_suffix}",
         }
+        executable_files: set[str] = set()
+        if config["os"] != "win32":
+            zsh_path = f"{vendor_prefix}codex-resources/zsh/bin/zsh"
+            required_files.add(zsh_path)
+            executable_files.update(
+                {
+                    f"{vendor_prefix}bin/codex",
+                    f"{vendor_prefix}bin/codex-code-mode-host",
+                    f"{vendor_prefix}codex-path/rg",
+                    zsh_path,
+                }
+            )
         if config["os"] == "linux":
-            required_files.add(f"{vendor_prefix}codex-resources/bwrap")
+            bwrap_path = f"{vendor_prefix}codex-resources/bwrap"
+            required_files.add(bwrap_path)
+            executable_files.add(bwrap_path)
         elif config["os"] == "win32":
             required_files.update(
                 {
@@ -188,6 +203,7 @@ def validate_platform_tarball(
                 }
             )
         require_regular_files(archive, required_files)
+        require_executable_files(archive, executable_files)
 
         unexpected_targets = sorted(
             {
@@ -298,6 +314,17 @@ def require_regular_files(archive: tarfile.TarFile, required_files: set[str]) ->
         if not member.isfile():
             raise ReleaseValidationError(
                 f"{Path(archive.name).name}: {member_name} is not a regular file"
+            )
+
+
+def require_executable_files(
+    archive: tarfile.TarFile, executable_files: set[str]
+) -> None:
+    for member_name in sorted(executable_files):
+        member = archive.getmember(member_name)
+        if member.mode & 0o111 == 0:
+            raise ReleaseValidationError(
+                f"{Path(archive.name).name}: {member_name} is not executable"
             )
 
 
