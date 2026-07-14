@@ -64,6 +64,11 @@ suffixes such as `0.144.3-nexus.1-linux-x64`; the root version references them
 through npm aliases. Platform versions must be published serially before the
 root version advances `latest`.
 
+Changes under `codex-cli/` trigger the lightweight `Nexus package tests`
+workflow on Linux and Windows. Use it to validate packaging changes without
+starting the six-platform Rust build; the release workflow repeats those tests
+before producing binaries.
+
 The workflow's npm job is disabled unless the repository variable
 `NEXUS_NPM_PUBLISH_ENABLED` is exactly `true`. Do not enable it before the
 package exists and npm Trusted Publishing is configured.

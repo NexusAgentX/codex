@@ -118,7 +118,8 @@ to `main` starts the fork's upstream CI workflows. Never merge `nexus` into
    platform dist-tags, then publish the root version under `latest`.
 5. Run the focused Python package tests on Linux and Windows, validate the
    complete seven-tarball set, and inspect `npm pack` metadata before
-   publishing.
+   publishing. Use `nexus-package-tests.yml` for a fast push or manual check;
+   the release workflow repeats the same tests before building binaries.
 6. Preserve the Nexus-aware native updater behavior: Nexus npm installations
    must check `@nexus-agent-x/codex`, compare prerelease versions correctly,
    and never redirect users to the upstream package.
