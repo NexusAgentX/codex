@@ -10,8 +10,7 @@ Install it globally with:
 npm install -g @nexus-agent-x/codex
 ```
 
-The package currently remains in pre-release validation. The release pipeline
-builds and validates native packages for:
+The release pipeline builds and validates native packages for:
 
 - Linux x64 and ARM64
 - macOS Intel and Apple Silicon
