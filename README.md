@@ -1,3 +1,29 @@
+# NexusAgentX Codex
+
+This repository's default `nexus` branch is the unofficial NexusAgentX
+distribution of OpenAI Codex CLI. The `main` branch mirrors upstream, while
+Nexus-specific changes are maintained as a patch stack on stable OpenAI
+releases.
+
+Install a published Nexus build on Linux, macOS, or Windows with:
+
+```shell
+npm install -g @nexus-agent-x/codex
+```
+
+Native packages are built for x64 and ARM64 on all three operating systems.
+macOS and Windows executables are unsigned community builds. See
+[Nexus releases](https://github.com/NexusAgentX/codex/releases) and the
+[release workflow](https://github.com/NexusAgentX/codex/actions/workflows/nexus-release.yml)
+for current availability.
+
+For the official project and distribution, use
+[`openai/codex`](https://github.com/openai/codex).
+
+---
+
+## Upstream project information
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
