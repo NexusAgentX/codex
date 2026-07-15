@@ -9,6 +9,8 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct VersionInfo {
     pub(crate) latest_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<String>,
     // ISO-8601 timestamp (RFC3339)
     pub(crate) last_checked_at: DateTime<Utc>,
     #[serde(default)]
@@ -34,6 +36,7 @@ pub(crate) async fn dismiss_version(config: &Config, version: &str) -> anyhow::R
         Ok(info) => info,
         Err(_) => VersionInfo {
             latest_version: version.to_string(),
+            source: None,
             last_checked_at: DateTime::<Utc>::UNIX_EPOCH,
             dismissed_version: None,
         },

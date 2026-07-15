@@ -13,6 +13,7 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::updates;
+use crate::version::CODEX_CLI_VERSION;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -26,8 +27,6 @@ use ratatui::text::Line;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 use tokio_stream::StreamExt;
-
-const RELEASE_NOTES_URL: &str = "https://github.com/openai/codex/releases/latest";
 
 pub(crate) enum UpdatePromptOutcome {
     Continue,
@@ -45,8 +44,11 @@ pub(crate) async fn run_update_prompt_if_needed(
         return Ok(UpdatePromptOutcome::Continue);
     };
 
-    let mut screen =
-        UpdatePromptScreen::new(tui.frame_requester(), latest_version.clone(), update_action);
+    let mut screen = UpdatePromptScreen::new(
+        tui.frame_requester(),
+        latest_version.clone(),
+        update_action.clone(),
+    );
     tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
     })?;
@@ -107,10 +109,15 @@ impl UpdatePromptScreen {
         latest_version: String,
         update_action: UpdateAction,
     ) -> Self {
+        let current_version = update_action
+            .managed_package()
+            .map(codex_install_context::ManagedPackage::version)
+            .unwrap_or(CODEX_CLI_VERSION)
+            .to_string();
         Self {
             request_frame,
             latest_version,
-            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            current_version,
             update_action,
             highlighted: UpdateSelection::UpdateNow,
             selection: None,
@@ -189,6 +196,7 @@ impl WidgetRef for &UpdatePromptScreen {
         let mut column = ColumnRenderable::new();
 
         let update_command = self.update_action.command_str();
+        let release_notes_url = self.update_action.release_notes_url();
 
         column.push("");
         column.push(Line::from(vec![
@@ -206,7 +214,7 @@ impl WidgetRef for &UpdatePromptScreen {
         column.push(
             Line::from(vec![
                 "Release notes: ".dim(),
-                RELEASE_NOTES_URL.dim().underlined(),
+                release_notes_url.dim().underlined(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
@@ -236,7 +244,7 @@ impl WidgetRef for &UpdatePromptScreen {
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.render(area, buf);
-        crate::terminal_hyperlinks::mark_underlined_hyperlink(buf, area, RELEASE_NOTES_URL);
+        crate::terminal_hyperlinks::mark_underlined_hyperlink(buf, area, release_notes_url);
     }
 }
 
@@ -245,16 +253,20 @@ mod tests {
     use super::*;
     use crate::test_backend::VT100Backend;
     use crate::tui::FrameRequester;
+    use codex_install_context::ManagedPackage;
+    use codex_install_context::OFFICIAL_CODEX_NPM_PACKAGE;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use ratatui::Terminal;
 
     fn new_prompt() -> UpdatePromptScreen {
+        let package = ManagedPackage::from_parts(OFFICIAL_CODEX_NPM_PACKAGE, CODEX_CLI_VERSION)
+            .expect("valid managed package");
         UpdatePromptScreen::new(
             FrameRequester::test_dummy(),
             "9.9.9".into(),
-            UpdateAction::NpmGlobalLatest,
+            UpdateAction::NpmGlobalLatest(package),
         )
     }
 
@@ -266,6 +278,27 @@ mod tests {
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render update prompt");
         insta::assert_snapshot!("update_prompt_modal", terminal.backend());
+    }
+
+    #[test]
+    fn nexus_prompt_uses_managed_package_identity() {
+        let package = ManagedPackage::from_parts("@nexus-agent-x/codex", "0.144.3-nexus.4")
+            .expect("valid managed package");
+        let screen = UpdatePromptScreen::new(
+            FrameRequester::test_dummy(),
+            "0.145.0-nexus.1".into(),
+            UpdateAction::NpmGlobalLatest(package),
+        );
+
+        assert_eq!(screen.current_version, "0.144.3-nexus.4");
+        assert_eq!(
+            screen.update_action.command_str(),
+            "npm install -g @nexus-agent-x/codex"
+        );
+        assert_eq!(
+            screen.update_action.release_notes_url(),
+            "https://github.com/NexusAgentX/codex/releases/latest"
+        );
     }
 
     #[test]
