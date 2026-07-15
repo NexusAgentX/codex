@@ -1,0 +1,575 @@
+name: nexus-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "nexus-v*"
+
+concurrency:
+  group: nexus-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Read release metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      nexus_version: ${{ steps.metadata.outputs.nexus_version }}
+      version: ${{ steps.metadata.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Read and validate release metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' codex-rs/Cargo.toml | head -1)"
+          if [[ -z "$version" || "$version" == "0.0.0" ]]; then
+            echo "Expected a versioned upstream release base, got '${version}'." >&2
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag_regex="^nexus-v${version//./\\.}\\.[1-9][0-9]*$"
+            if [[ ! "${GITHUB_REF_NAME}" =~ $tag_regex ]]; then
+              echo "Tag '${GITHUB_REF_NAME}' must match nexus-v${version}.<build>." >&2
+              exit 1
+            fi
+            build_number="${GITHUB_REF_NAME##*.}"
+          else
+            build_number="0"
+          fi
+
+          nexus_version="${version}-nexus.${build_number}"
+          echo "nexus_version=${nexus_version}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  package-tests:
+    name: Test Nexus npm packaging (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - windows-2025
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - run: python -m unittest discover -s codex-cli/scripts -p 'test_*.py'
+
+  build-platforms:
+    name: Build ${{ matrix.npm_tag }} package
+    needs:
+      - metadata
+      - package-tests
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      TARGET: ${{ matrix.target }}
+      NEXUS_VERSION: ${{ needs.metadata.outputs.nexus_version }}
+      CODEX_CLI_VERSION_OVERRIDE: ${{ needs.metadata.outputs.nexus_version }}
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            family: linux
+            target: x86_64-unknown-linux-musl
+            npm_package: codex-linux-x64
+            npm_tag: linux-x64
+            can_run: "true"
+          - runner: ubuntu-24.04-arm
+            family: linux
+            target: aarch64-unknown-linux-musl
+            npm_package: codex-linux-arm64
+            npm_tag: linux-arm64
+            can_run: "true"
+          - runner: macos-15-intel
+            family: macos
+            target: x86_64-apple-darwin
+            npm_package: codex-darwin-x64
+            npm_tag: darwin-x64
+            can_run: "true"
+          - runner: macos-15
+            family: macos
+            target: aarch64-apple-darwin
+            npm_package: codex-darwin-arm64
+            npm_tag: darwin-arm64
+            can_run: "true"
+          - runner: windows-2025
+            family: windows
+            target: x86_64-pc-windows-msvc
+            npm_package: codex-win32-x64
+            npm_tag: win32-x64
+            can_run: "true"
+          - runner: windows-2025
+            family: windows
+            target: aarch64-pc-windows-msvc
+            npm_package: codex-win32-arm64
+            npm_tag: win32-arm64
+            can_run: "false"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        if: matrix.family == 'linux'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        if: matrix.family == 'linux'
+        shell: bash
+        run: bash .github/scripts/install-musl-build-tools.sh
+
+      - name: Disable aws-lc jitter entropy
+        if: matrix.family == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          target_variable="AWS_LC_SYS_NO_JITTER_ENTROPY_${TARGET//-/_}"
+          echo "${target_variable}=1" >> "$GITHUB_ENV"
+
+      - name: Configure rusty_v8 artifacts
+        if: matrix.family != 'windows'
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Configure MSVC environment
+        if: matrix.family == 'windows'
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Configure x64 Windows SQLite build
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: echo "LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC" >> "$GITHUB_ENV"
+
+      - name: Build bundled bubblewrap
+        if: matrix.family == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path codex-rs/Cargo.toml \
+            --target "$TARGET" \
+            --release \
+            --bin bwrap
+
+          bwrap_bin="$CARGO_TARGET_DIR/$TARGET/release/bwrap"
+          strip --strip-debug --strip-unneeded "$bwrap_bin"
+          digest="$(sha256sum "$bwrap_bin" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
+
+      - name: Build Codex binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_args=(--bin codex --bin codex-code-mode-host)
+          if [[ "${{ matrix.family }}" == "windows" ]]; then
+            build_args+=(--bin codex-command-runner --bin codex-windows-sandbox-setup)
+          fi
+
+          cargo build \
+            --manifest-path codex-rs/Cargo.toml \
+            --target "$TARGET" \
+            --release \
+            "${build_args[@]}"
+
+      - name: Strip release binaries
+        if: matrix.family != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="$CARGO_TARGET_DIR/$TARGET/release"
+          if [[ "${{ matrix.family }}" == "macos" ]]; then
+            strip -S -x "$release_dir/codex" "$release_dir/codex-code-mode-host"
+          else
+            strip --strip-debug --strip-unneeded \
+              "$release_dir/codex" \
+              "$release_dir/codex-code-mode-host"
+          fi
+
+      - name: Build canonical and npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="$CARGO_TARGET_DIR/$TARGET/release"
+          package_dir="$RUNNER_TEMP/codex-package-$TARGET"
+          canonical_archive="dist/packages/codex-package-$TARGET.tar.gz"
+          npm_archive="dist/npm/codex-npm-${{ matrix.npm_tag }}-$NEXUS_VERSION.tgz"
+          exe_suffix=""
+          if [[ "${{ matrix.family }}" == "windows" ]]; then
+            exe_suffix=".exe"
+          fi
+
+          package_args=(
+            scripts/build_codex_package.py
+            --target "$TARGET"
+            --variant codex
+            --version "$NEXUS_VERSION"
+            --entrypoint-bin "$release_dir/codex${exe_suffix}"
+            --code-mode-host-bin "$release_dir/codex-code-mode-host${exe_suffix}"
+            --package-dir "$package_dir"
+            --archive-output "$canonical_archive"
+            --force
+          )
+          if [[ "${{ matrix.family }}" == "linux" ]]; then
+            package_args+=(--bwrap-bin "$release_dir/bwrap")
+          elif [[ "${{ matrix.family }}" == "windows" ]]; then
+            package_args+=(
+              --codex-command-runner-bin "$release_dir/codex-command-runner.exe"
+              --codex-windows-sandbox-setup-bin "$release_dir/codex-windows-sandbox-setup.exe"
+            )
+          fi
+          python "${package_args[@]}"
+
+          python - "$package_dir/codex-package.json" "$TARGET" "$NEXUS_VERSION" <<'PY'
+          import json
+          import sys
+
+          metadata_path, expected_target, expected_version = sys.argv[1:]
+          with open(metadata_path, encoding="utf-8") as metadata_file:
+              metadata = json.load(metadata_file)
+          if metadata.get("target") != expected_target:
+              raise SystemExit(f"unexpected package target: {metadata.get('target')}")
+          if metadata.get("version") != expected_version:
+              raise SystemExit(f"unexpected package version: {metadata.get('version')}")
+          PY
+
+          if [[ "${{ matrix.can_run }}" == "true" ]]; then
+            version_output="$("$package_dir/bin/codex${exe_suffix}" --version)"
+            if [[ "${version_output##* }" != "$NEXUS_VERSION" ]]; then
+              echo "Unexpected Codex version output: ${version_output}" >&2
+              exit 1
+            fi
+          fi
+
+          vendor_target="$RUNNER_TEMP/npm-vendor/$TARGET"
+          mkdir -p "$vendor_target" "$(dirname "$npm_archive")"
+          cp -a "$package_dir/." "$vendor_target/"
+          python codex-cli/scripts/build_npm_package.py \
+            --package "${{ matrix.npm_package }}" \
+            --release-version "$NEXUS_VERSION" \
+            --vendor-src "$RUNNER_TEMP/npm-vendor" \
+            --pack-output "$npm_archive"
+
+          python codex-cli/scripts/validate_nexus_npm_release.py \
+            --version "$NEXUS_VERSION" \
+            --tarball-dir dist/npm \
+            --platform "${{ matrix.npm_package }}"
+
+      - name: Upload canonical package
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-package-${{ matrix.target }}
+          path: dist/packages/codex-package-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+      - name: Upload platform npm tarball
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: nexus-npm-platform-${{ matrix.npm_tag }}
+          path: dist/npm/codex-npm-${{ matrix.npm_tag }}-${{ needs.metadata.outputs.nexus_version }}.tgz
+          if-no-files-found: error
+
+  assemble-npm:
+    name: Assemble complete npm release set
+    needs:
+      - metadata
+      - build-platforms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXUS_VERSION: ${{ needs.metadata.outputs.nexus_version }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Download all platform npm tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: nexus-npm-platform-*
+          merge-multiple: true
+          path: dist/npm
+
+      - name: Build and validate root npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python codex-cli/scripts/build_npm_package.py \
+            --package codex \
+            --release-version "$NEXUS_VERSION" \
+            --pack-output "dist/npm/codex-npm-$NEXUS_VERSION.tgz"
+          python codex-cli/scripts/validate_nexus_npm_release.py \
+            --version "$NEXUS_VERSION" \
+            --tarball-dir dist/npm
+          ls -lh dist/npm
+
+      - name: Upload complete npm release set
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: nexus-npm-tarballs
+          path: dist/npm/*.tgz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/nexus-v')
+    needs:
+      - metadata
+      - assemble-npm
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download canonical packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codex-package-*
+          merge-multiple: true
+          path: release
+
+      - name: Download npm tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nexus-npm-tarballs
+          path: release
+
+      - name: Generate checksum manifest
+        shell: bash
+        working-directory: release
+        run: sha256sum -- ./*.tar.gz ./*.tgz > SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          name: Nexus Codex ${{ github.ref_name }}
+          body: |
+            Unofficial NexusAgentX build based on OpenAI Codex ${{ needs.metadata.outputs.version }}.
+
+            Source commit: `${{ github.sha }}`
+            Nexus version: `${{ needs.metadata.outputs.nexus_version }}`
+            Targets: Linux x64/ARM64, macOS Intel/Apple Silicon, Windows x64/ARM64
+
+            macOS and Windows executables are unsigned community builds. The attached npm
+            tarballs are the exact registry publication artifacts. npm publication remains
+            separately gated by the repository's `NEXUS_NPM_PUBLISH_ENABLED` variable.
+          files: release/*
+          fail_on_unmatched_files: true
+          make_latest: true
+
+  publish-npm:
+    name: Publish npm package
+    if: >-
+      ${{
+        github.event_name == 'push' &&
+        startsWith(github.ref, 'refs/tags/nexus-v') &&
+        vars.NEXUS_NPM_PUBLISH_ENABLED == 'true' &&
+        needs.release.result == 'success'
+      }}
+    needs:
+      - metadata
+      - release
+    runs-on: ubuntu-24.04
+    environment:
+      name: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          # npm Trusted Publishing requires npm >= 11.5.1.
+          node-version: 24
+          package-manager-cache: false
+          registry-url: "https://registry.npmjs.org"
+          scope: "@nexus-agent-x"
+
+      - name: Download npm tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nexus-npm-tarballs
+          path: dist/npm
+
+      - name: Validate npm release set before publication
+        env:
+          NEXUS_VERSION: ${{ needs.metadata.outputs.nexus_version }}
+        run: |
+          set -euo pipefail
+          python codex-cli/scripts/validate_nexus_npm_release.py \
+            --version "$NEXUS_VERSION" \
+            --tarball-dir dist/npm
+
+      # No NODE_AUTH_TOKEN is used. npm exchanges the GitHub OIDC identity for
+      # short-lived publication credentials after the trusted publisher is configured.
+      - name: Publish platform versions, then root package
+        env:
+          NEXUS_VERSION: ${{ needs.metadata.outputs.nexus_version }}
+        run: |
+          set -euo pipefail
+          version="$NEXUS_VERSION"
+          package_name="@nexus-agent-x/codex"
+          platform_tags=(
+            linux-x64
+            linux-arm64
+            darwin-x64
+            darwin-arm64
+            win32-x64
+            win32-arm64
+          )
+
+          publish_tarball() {
+            local tarball="$1"
+            local tag="$2"
+            local filename
+            filename="$(basename "$tarball")"
+
+            if [[ ! -f "$tarball" ]]; then
+              echo "Missing npm tarball: $tarball" >&2
+              return 1
+            fi
+
+            publish_cmd=(npm publish "$tarball" --access public --tag "$tag")
+            echo "+ npm publish $filename --access public --tag $tag"
+            set +e
+            publish_output="$("${publish_cmd[@]}" 2>&1)"
+            publish_status=$?
+            set -e
+            echo "$publish_output"
+
+            if [[ $publish_status -eq 0 ]]; then
+              return 0
+            fi
+            if grep -qiE \
+              "previously published|cannot publish over|version already exists" \
+              <<< "$publish_output"; then
+              echo "Skipping already-published package version for $filename"
+              return 0
+            fi
+            return "$publish_status"
+          }
+
+          # Every platform tarball is a distinct version of the same package.
+          # Publish serially to avoid registry packument conflicts. The root
+          # wrapper advances latest only after all six exact dependencies exist.
+          for platform_tag in "${platform_tags[@]}"; do
+            publish_tarball \
+              "dist/npm/codex-npm-${platform_tag}-${version}.tgz" \
+              "$platform_tag"
+          done
+          publish_tarball "dist/npm/codex-npm-${version}.tgz" latest
+
+          encoded_package_name="$(
+            node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' \
+              "$package_name"
+          )"
+          dist_tags_url="https://registry.npmjs.org/-/package/${encoded_package_name}/dist-tags"
+          dist_tags_file="$RUNNER_TEMP/npm-dist-tags.json"
+          dist_tags_verified=false
+
+          # A newly created package's packument can briefly retain a cached 404
+          # after publication. The dedicated dist-tags endpoint is authoritative;
+          # retry it with a cache-busting query while registry edges converge.
+          for attempt in $(seq 1 12); do
+            rm -f "$dist_tags_file"
+            if curl --fail --silent --show-error \
+              --header "Cache-Control: no-cache" \
+              --output "$dist_tags_file" \
+              "${dist_tags_url}?cachebust=$(date +%s%N)" &&
+              jq -e --arg version "$version" '
+                .latest == $version and
+                .["linux-x64"] == ($version + "-linux-x64") and
+                .["linux-arm64"] == ($version + "-linux-arm64") and
+                .["darwin-x64"] == ($version + "-darwin-x64") and
+                .["darwin-arm64"] == ($version + "-darwin-arm64") and
+                .["win32-x64"] == ($version + "-win32-x64") and
+                .["win32-arm64"] == ($version + "-win32-arm64")
+              ' "$dist_tags_file"; then
+              dist_tags_verified=true
+              break
+            fi
+
+            echo "npm dist-tags have not converged (attempt $attempt/12)."
+            if [[ -f "$dist_tags_file" ]]; then
+              cat "$dist_tags_file"
+            fi
+            if [[ $attempt -lt 12 ]]; then
+              sleep 5
+            fi
+          done
+
+          if [[ "$dist_tags_verified" != "true" ]]; then
+            echo "npm dist-tags did not converge for $package_name." >&2
+            exit 1
+          fi
