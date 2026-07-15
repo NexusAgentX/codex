@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @openai/codex npm module."""
+"""Stage and optionally package the Codex CLI npm module."""
 
 import argparse
 import json
@@ -15,49 +15,55 @@ CODEX_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
-CODEX_NPM_NAME = "@openai/codex"
+CODEX_NPM_README = CODEX_CLI_ROOT / "README.nexus.md"
 CODEX_PACKAGE_COMPONENT = "codex-package"
 
-# `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
-# The underlying package published to npm is always `@openai/codex`.
+
+def read_codex_npm_name() -> str:
+    with open(CODEX_CLI_ROOT / "package.json", "r", encoding="utf-8") as fh:
+        package_json = json.load(fh)
+    name = package_json.get("name")
+    if not isinstance(name, str) or not name:
+        raise RuntimeError("codex-cli/package.json must define a package name.")
+    return name
+
+
+CODEX_NPM_NAME = read_codex_npm_name()
+
+# These keys name staging jobs. The local optional-dependency aliases consumed
+# by bin/codex.js are derived from CODEX_NPM_NAME and each npm_tag.
 CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "codex-linux-x64": {
-        "npm_name": "@openai/codex-linux-x64",
         "npm_tag": "linux-x64",
         "target_triple": "x86_64-unknown-linux-musl",
         "os": "linux",
         "cpu": "x64",
     },
     "codex-linux-arm64": {
-        "npm_name": "@openai/codex-linux-arm64",
         "npm_tag": "linux-arm64",
         "target_triple": "aarch64-unknown-linux-musl",
         "os": "linux",
         "cpu": "arm64",
     },
     "codex-darwin-x64": {
-        "npm_name": "@openai/codex-darwin-x64",
         "npm_tag": "darwin-x64",
         "target_triple": "x86_64-apple-darwin",
         "os": "darwin",
         "cpu": "x64",
     },
     "codex-darwin-arm64": {
-        "npm_name": "@openai/codex-darwin-arm64",
         "npm_tag": "darwin-arm64",
         "target_triple": "aarch64-apple-darwin",
         "os": "darwin",
         "cpu": "arm64",
     },
     "codex-win32-x64": {
-        "npm_name": "@openai/codex-win32-x64",
         "npm_tag": "win32-x64",
         "target_triple": "x86_64-pc-windows-msvc",
         "os": "win32",
         "cpu": "x64",
     },
     "codex-win32-arm64": {
-        "npm_name": "@openai/codex-win32-arm64",
         "npm_tag": "win32-arm64",
         "target_triple": "aarch64-pc-windows-msvc",
         "os": "win32",
@@ -88,8 +94,11 @@ PACKAGE_TARGET_FILTERS: dict[str, str] = {
 
 PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
 
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
+    parser = argparse.ArgumentParser(
+        description="Build or stage the Codex CLI npm package."
+    )
     parser.add_argument(
         "--package",
         choices=PACKAGE_CHOICES,
@@ -102,9 +111,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--release-version",
-        help=(
-            "Version to stage for npm release."
-        ),
+        help="Version to stage for npm release.",
     )
     parser.add_argument(
         "--staging-dir",
@@ -141,7 +148,9 @@ def main() -> int:
     release_version = args.release_version
     if release_version:
         if version and version != release_version:
-            raise RuntimeError("--version and --release-version must match when both are provided.")
+            raise RuntimeError(
+                "--version and --release-version must match when both are provided."
+            )
         version = release_version
 
     if not version:
@@ -235,7 +244,9 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         bin_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
 
-        readme_src = REPO_ROOT / "README.md"
+        readme_src = CODEX_NPM_README
+        if not readme_src.exists():
+            readme_src = REPO_ROOT / "README.md"
         if readme_src.exists():
             shutil.copy2(readme_src, staging_dir / "README.md")
 
@@ -245,7 +256,9 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         platform_npm_tag = platform_package["npm_tag"]
         platform_version = compute_platform_package_version(version, platform_npm_tag)
 
-        readme_src = REPO_ROOT / "README.md"
+        readme_src = CODEX_NPM_README
+        if not readme_src.exists():
+            readme_src = REPO_ROOT / "README.md"
         if readme_src.exists():
             shutil.copy2(readme_src, staging_dir / "README.md")
 
@@ -269,10 +282,16 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         package_manager = codex_package_json.get("packageManager")
         if isinstance(package_manager, str):
             package_json["packageManager"] = package_manager
+
+        publish_config = codex_package_json.get("publishConfig")
+        if isinstance(publish_config, dict):
+            package_json["publishConfig"] = publish_config
     elif package == "codex-responses-api-proxy":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        launcher_src = RESPONSES_API_PROXY_NPM_ROOT / "bin" / "codex-responses-api-proxy.js"
+        launcher_src = (
+            RESPONSES_API_PROXY_NPM_ROOT / "bin" / "codex-responses-api-proxy.js"
+        )
         shutil.copy2(launcher_src, bin_dir / "codex-responses-api-proxy.js")
 
         readme_src = RESPONSES_API_PROXY_NPM_ROOT / "README.md"
@@ -294,7 +313,10 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     if package == "codex":
         package_json["files"] = ["bin/codex.js"]
         package_json["optionalDependencies"] = {
-            CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
+            platform_package_alias(
+                CODEX_NPM_NAME,
+                CODEX_PLATFORM_PACKAGES[platform_package]["npm_tag"],
+            ): (
                 f"npm:{CODEX_NPM_NAME}@"
                 f"{compute_platform_package_version(version, CODEX_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
             )
@@ -322,6 +344,10 @@ def compute_platform_package_version(version: str, platform_tag: str) -> str:
     # npm forbids republishing the same package name/version, so each
     # platform-specific tarball needs a unique version string.
     return f"{version}-{platform_tag}"
+
+
+def platform_package_alias(package_name: str, platform_tag: str) -> str:
+    return f"{package_name}-{platform_tag}"
 
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> None:
@@ -405,11 +431,17 @@ def copy_native_binaries(
         missing_targets = sorted(target_filter - copied_targets)
         if missing_targets:
             missing_list = ", ".join(missing_targets)
-            raise RuntimeError(f"Missing target directories in vendor source: {missing_list}")
+            raise RuntimeError(
+                f"Missing target directories in vendor source: {missing_list}"
+            )
+
 
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    npm_executable = shutil.which("npm")
+    if npm_executable is None:
+        raise RuntimeError("npm executable not found in PATH.")
 
     with tempfile.TemporaryDirectory(prefix="codex-npm-pack-") as pack_dir_str:
         pack_dir = Path(pack_dir_str)
@@ -421,7 +453,13 @@ def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
         env["NPM_CONFIG_CACHE"] = str(npm_cache_dir)
         env["NPM_CONFIG_LOGS_DIR"] = str(npm_logs_dir)
         stdout = subprocess.check_output(
-            ["npm", "pack", "--json", "--pack-destination", str(pack_dir)],
+            [
+                npm_executable,
+                "pack",
+                "--json",
+                "--pack-destination",
+                str(pack_dir),
+            ],
             cwd=staging_dir,
             env=env,
             text=True,

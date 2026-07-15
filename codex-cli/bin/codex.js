@@ -2,7 +2,7 @@
 // Unified entry point for the Codex CLI.
 
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "fs";
+import { existsSync, readFileSync, realpathSync } from "fs";
 import { createRequire } from "node:module";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -12,14 +12,27 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 const codexPackageRoot = realpathSync(path.join(__dirname, ".."));
+const codexPackageJson = JSON.parse(
+  readFileSync(path.join(codexPackageRoot, "package.json"), "utf8"),
+);
+const codexPackageName = codexPackageJson.name;
+const codexPackageVersion = codexPackageJson.version;
 
-const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
-  "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64",
-  "x86_64-apple-darwin": "@openai/codex-darwin-x64",
-  "aarch64-apple-darwin": "@openai/codex-darwin-arm64",
-  "x86_64-pc-windows-msvc": "@openai/codex-win32-x64",
-  "aarch64-pc-windows-msvc": "@openai/codex-win32-arm64",
+if (typeof codexPackageName !== "string" || !codexPackageName) {
+  throw new Error("Codex package.json is missing a package name");
+}
+if (typeof codexPackageVersion !== "string" || !codexPackageVersion) {
+  throw new Error("Codex package.json is missing a package version");
+}
+const codexPackagePathParts = codexPackageName.split("/");
+
+const PLATFORM_PACKAGE_SUFFIX_BY_TARGET = {
+  "x86_64-unknown-linux-musl": "linux-x64",
+  "aarch64-unknown-linux-musl": "linux-arm64",
+  "x86_64-apple-darwin": "darwin-x64",
+  "aarch64-apple-darwin": "darwin-arm64",
+  "x86_64-pc-windows-msvc": "win32-x64",
+  "aarch64-pc-windows-msvc": "win32-arm64",
 };
 
 const { platform, arch } = process;
@@ -71,10 +84,11 @@ if (!targetTriple) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
 }
 
-const platformPackage = PLATFORM_PACKAGE_BY_TARGET[targetTriple];
-if (!platformPackage) {
+const platformPackageSuffix = PLATFORM_PACKAGE_SUFFIX_BY_TARGET[targetTriple];
+if (!platformPackageSuffix) {
   throw new Error(`Unsupported target triple: ${targetTriple}`);
 }
+const platformPackage = `${codexPackageName}-${platformPackageSuffix}`;
 
 function findCodexExecutable() {
   let vendorRoot;
@@ -98,10 +112,10 @@ function findCodexExecutable() {
   const packageManager = detectPackageManager();
   const updateCommand =
     packageManager === "bun"
-      ? "bun install -g @openai/codex@latest"
+      ? `bun install -g ${codexPackageName}@latest`
       : packageManager === "pnpm"
-        ? "pnpm add -g @openai/codex@latest"
-        : "npm install -g @openai/codex@latest";
+        ? `pnpm add -g ${codexPackageName}@latest`
+        : `npm install -g ${codexPackageName}@latest`;
   throw new Error(
     `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
   );
@@ -122,7 +136,7 @@ function isPnpmOwnedCodexInstall(nodeModulesDir) {
 
   try {
     return (
-      realpathSync(path.join(nodeModulesDir, "@openai", "codex")) ===
+      realpathSync(path.join(nodeModulesDir, ...codexPackagePathParts)) ===
       codexPackageRoot
     );
   } catch {
@@ -185,7 +199,9 @@ const packageManagerEnvVar =
       : "CODEX_MANAGED_BY_NPM";
 const env = {
   ...process.env,
+  CODEX_MANAGED_PACKAGE_NAME: codexPackageName,
   CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,
+  CODEX_MANAGED_PACKAGE_VERSION: codexPackageVersion,
 };
 delete env.CODEX_MANAGED_BY_NPM;
 delete env.CODEX_MANAGED_BY_BUN;
