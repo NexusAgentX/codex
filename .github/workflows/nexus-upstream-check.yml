@@ -1,0 +1,72 @@
+name: Nexus upstream check
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1"
+
+concurrency:
+  group: nexus-upstream-check
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Compare stable upstream release
+    if: github.repository == 'NexusAgentX/codex'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: nexus
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compare release tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_regex='^rust-v[0-9]+\.[0-9]+\.[0-9]+$'
+
+          git fetch --force --no-tags https://github.com/openai/codex.git \
+            '+refs/tags/rust-v*:refs/tags/rust-v*'
+
+          current_tag="$(
+            git describe --tags --match 'rust-v[0-9]*' --abbrev=0 HEAD
+          )"
+          latest_tag="$(
+            gh api repos/openai/codex/releases/latest --jq '.tag_name'
+          )"
+
+          if [[ ! "$current_tag" =~ $tag_regex ]]; then
+            echo "Could not determine a stable upstream tag beneath nexus: $current_tag" >&2
+            exit 1
+          fi
+          if [[ ! "$latest_tag" =~ $tag_regex ]]; then
+            echo "OpenAI's latest release is not a stable Rust tag: $latest_tag" >&2
+            exit 1
+          fi
+
+          {
+            printf '### Nexus upstream status\n\n'
+            printf '| | Tag |\n|---|---|\n'
+            printf '| Current base | <code>%s</code> |\n' "$current_tag"
+            printf '| Latest stable | <code>%s</code> |\n' "$latest_tag"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$current_tag" == "$latest_tag" ]]; then
+            printf '\nThe Nexus patch stack is current.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            printf '\nA newer stable upstream release is available. Preview it with:\n\n'
+            printf '    scripts/nexus/update-upstream.sh --target %s --dry-run\n' "$latest_tag"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Nexus upstream update available::$current_tag -> $latest_tag"
+          exit 1
