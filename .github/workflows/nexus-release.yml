@@ -530,13 +530,46 @@ jobs:
           done
           publish_tarball "dist/npm/codex-npm-${version}.tgz" latest
 
-          npm view "$package_name" dist-tags --json > "$RUNNER_TEMP/npm-dist-tags.json"
-          jq -e --arg version "$version" '
-            .latest == $version and
-            .["linux-x64"] == ($version + "-linux-x64") and
-            .["linux-arm64"] == ($version + "-linux-arm64") and
-            .["darwin-x64"] == ($version + "-darwin-x64") and
-            .["darwin-arm64"] == ($version + "-darwin-arm64") and
-            .["win32-x64"] == ($version + "-win32-x64") and
-            .["win32-arm64"] == ($version + "-win32-arm64")
-          ' "$RUNNER_TEMP/npm-dist-tags.json"
+          encoded_package_name="$(
+            node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' \
+              "$package_name"
+          )"
+          dist_tags_url="https://registry.npmjs.org/-/package/${encoded_package_name}/dist-tags"
+          dist_tags_file="$RUNNER_TEMP/npm-dist-tags.json"
+          dist_tags_verified=false
+
+          # A newly created package's packument can briefly retain a cached 404
+          # after publication. The dedicated dist-tags endpoint is authoritative;
+          # retry it with a cache-busting query while registry edges converge.
+          for attempt in $(seq 1 12); do
+            rm -f "$dist_tags_file"
+            if curl --fail --silent --show-error \
+              --header "Cache-Control: no-cache" \
+              --output "$dist_tags_file" \
+              "${dist_tags_url}?cachebust=$(date +%s%N)" &&
+              jq -e --arg version "$version" '
+                .latest == $version and
+                .["linux-x64"] == ($version + "-linux-x64") and
+                .["linux-arm64"] == ($version + "-linux-arm64") and
+                .["darwin-x64"] == ($version + "-darwin-x64") and
+                .["darwin-arm64"] == ($version + "-darwin-arm64") and
+                .["win32-x64"] == ($version + "-win32-x64") and
+                .["win32-arm64"] == ($version + "-win32-arm64")
+              ' "$dist_tags_file"; then
+              dist_tags_verified=true
+              break
+            fi
+
+            echo "npm dist-tags have not converged (attempt $attempt/12)."
+            if [[ -f "$dist_tags_file" ]]; then
+              cat "$dist_tags_file"
+            fi
+            if [[ $attempt -lt 12 ]]; then
+              sleep 5
+            fi
+          done
+
+          if [[ "$dist_tags_verified" != "true" ]]; then
+            echo "npm dist-tags did not converge for $package_name." >&2
+            exit 1
+          fi
